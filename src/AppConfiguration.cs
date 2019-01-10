@@ -7,5 +7,10 @@ namespace Ticketing.Worker
             get;
             set;
         }
+        public string MessagingConnectionString
+        {
+            get;
+            set;
+        }
     }
 }
