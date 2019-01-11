@@ -45,7 +45,10 @@ namespace Ticketing.Worker
         private static void WorkerRun()
         {
             var _appConfiguration = _serviceProvider.GetService<IOptionsSnapshot<AppConfiguration>>();
-            var factory = new ConnectionFactory() { HostName = _appConfiguration.Value.MessagingConnectionString };
+            Console.WriteLine($"MessagingQueue: {_appConfiguration.Value.MessagingQueue}");
+            var factory = new ConnectionFactory() { HostName = _appConfiguration.Value.Messaging };
+            factory.UserName = _appConfiguration.Value.MessagingUsername;
+            factory.Password = _appConfiguration.Value.MessagingPassword;
             do
             {
                 using (var connection = factory.CreateConnection())
