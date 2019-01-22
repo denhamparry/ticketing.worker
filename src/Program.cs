@@ -51,95 +51,42 @@ namespace Ticketing.Worker
                 .Build();
 
             await connection.StartAsync();
-            
-            await connection.SendAsync("broadcastMessage", workerName, "I've joined the channel");
 
+            await connection.SendAsync("broadcastMessage", workerName, "New challenger approaching!");
+            
             var serviceCollection = new ServiceCollection();
             serviceCollection.AddOptions();
             serviceCollection.Configure<AppConfiguration>(configuration.GetSection("AppConfiguration"));
             _serviceProvider = serviceCollection.BuildServiceProvider();
 
 
-            WorkerRun();
+            await WorkerRunAsync();
         }
 
-        private static void WorkerRun()
+        private static async Task WorkerRunAsync()
         {
             var _appConfiguration = _serviceProvider.GetService<IOptionsSnapshot<AppConfiguration>>();
-            Console.WriteLine($"MessagingQueue: {_appConfiguration.Value.MessagingQueue}");
+            await SendMessage($"Worker name: {_appConfiguration.Value.WorkerName} | MessagingQueue: {_appConfiguration.Value.MessagingQueue} | Username: {_appConfiguration.Value.MessagingUsername}");
             var factory = new ConnectionFactory() { HostName = _appConfiguration.Value.Messaging };
             factory.UserName = _appConfiguration.Value.MessagingUsername;
             factory.Password = _appConfiguration.Value.MessagingPassword;
-            using (var connection = factory.CreateConnection())
+            using (var queueConnection = factory.CreateConnection())
+            using (var channel = queueConnection.CreateModel())
             {
-                using (var channel = connection.CreateModel())
-                {
-                    channel.QueueDeclare(queue: _appConfiguration.Value.MessagingQueue, durable: false, exclusive: false, autoDelete: false, arguments: null);
-                    var consumer = new EventingBasicConsumer(channel);
-                    consumer.Received += async (model, ea) =>
-                    {
-                        await ProcessTaskAsync(model, ea);
-                    };
-                    channel.BasicConsume(queue: _appConfiguration.Value.MessagingQueue, autoAck: true, consumer: consumer);
-                }
+                var body = channel.BasicGet(_appConfiguration.Value.MessagingQueue, true).Body;
+                var message = Encoding.UTF8.GetString(body);
+                await SendMessage($"[x] Received {message}");
+                Thread.Sleep(1000);
+                await SendMessage("Processing...");
+                Thread.Sleep(4000);
+                await SendMessage("Compelted, ta ra!");
             }
         }
 
-        private static async Task ProcessTaskAsync(object model, BasicDeliverEventArgs ea)
+        private static async Task SendMessage(string message)
         {
-            var body = ea.Body;
-            var message = $"{workerName} [x] Received {Encoding.UTF8.GetString(body)}";
             Console.WriteLine(message);
             await connection.SendAsync("echo", message);
-        }
-
-        private static async Task EchoAsync()
-        {
-            var connection = new HubConnectionBuilder()
-                .WithUrl(url)
-                .ConfigureLogging(logging =>
-                {
-                    logging.AddConsole();
-                })
-                .AddMessagePackProtocol()
-                .Build();
-
-            await connection.StartAsync();
-            
-            var cts = new CancellationTokenSource();
-            Console.CancelKeyPress += (sender, a) =>
-            {
-                a.Cancel = true;
-                cts.Cancel();
-            };
-
-            connection.Closed += e =>
-            {
-                Console.WriteLine("Connection closed with error: {0}", e);
-
-                cts.Cancel();
-                return Task.CompletedTask;
-            };
-            
-            await connection.SendAsync("broadcastMessage", workerName, "I've joined the channel");
-            bool enableLoop = true;
-
-            do
-            {
-                try
-                {
-                await connection.SendAsync("echo", workerName);
-                    Thread.Sleep(2000);
-                }
-                catch
-                {
-                    Console.WriteLine("Connection is shutting down due to an error.");
-                    enableLoop = false;
-                }
-            }
-            while(enableLoop);
-            return;
-
         }
     }
 }
