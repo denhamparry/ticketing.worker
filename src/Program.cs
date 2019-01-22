@@ -72,13 +72,25 @@ namespace Ticketing.Worker
             using (var queueConnection = factory.CreateConnection())
             using (var channel = queueConnection.CreateModel())
             {
-                var body = channel.BasicGet(_appConfiguration.Value.MessagingQueue, true).Body;
-                var message = Encoding.UTF8.GetString(body);
-                await SendMessage($"[x] Received {message}");
-                Thread.Sleep(1000);
-                await SendMessage("Processing...");
-                Thread.Sleep(4000);
-                await SendMessage("Compelted, ta ra!");
+                for(int i = 0; i < 10; i++)
+                {
+                    var ea = channel.BasicGet(_appConfiguration.Value.MessagingQueue, true);
+                    if (ea == null)
+                    {
+                        await SendMessage($"[ ] no work to do, having a break");
+                        Thread.Sleep(5000);
+                    }
+                    else
+                    {
+                        var message = Encoding.UTF8.GetString(ea.Body);
+                        await SendMessage($"[x] Received {message}");
+                        Thread.Sleep(1000);
+                        await SendMessage("Processing...");
+                        Thread.Sleep(4000);
+                        await SendMessage("Compelted, ta ra!");
+                    }
+                }
+                await SendMessage($"{_appConfiguration.Value.WorkerName} finishing their shift, good night!");
             }
         }
 
