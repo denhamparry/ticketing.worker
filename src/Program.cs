@@ -42,6 +42,11 @@ namespace Ticketing.Worker
             serviceCollection.Configure<AppConfiguration>(configuration.GetSection("AppConfiguration"));
             _serviceProvider = serviceCollection.BuildServiceProvider();
 
+            await WorkerRunAsync();
+        }
+
+        private static async Task WorkerRunAsync()
+        {
             var connection = new HubConnectionBuilder()
                 .WithUrl("http://localhost:5000/workers")
                 .ConfigureLogging(logging =>
@@ -52,10 +57,7 @@ namespace Ticketing.Worker
                 .Build();
 
             await connection.StartAsync();
-
-            Console.WriteLine("Starting connection. Press Ctrl-C to close.");
-
-            Console.WriteLine("Starting connection. Press Ctrl-C to close.");
+            
             var cts = new CancellationTokenSource();
             Console.CancelKeyPress += (sender, a) =>
             {
@@ -71,36 +73,13 @@ namespace Ticketing.Worker
                 return Task.CompletedTask;
             };
 
-
-            connection.On("marketOpened", () =>
+            do
             {
-                Console.WriteLine("Market opened");
-            });
-
-            connection.On("marketClosed", () =>
-            {
-                Console.WriteLine("Market closed");
-            });
-
-            connection.On("marketReset", () =>
-            {
-                Console.WriteLine("Reset recieved");
-
-                cts.Cancel();
-            });
-
-            var channel = await connection.StreamAsChannelAsync<Stock>("StreamStocks", CancellationToken.None);
-            while (await channel.WaitToReadAsync() && !cts.IsCancellationRequested)
-            {
-                while (channel.TryRead(out var stock))
-                {
-                    Console.WriteLine($"{stock.Symbol} {stock.Price}");
-                }
+                await connection.SendAsync("alive", "lewis");
+                Thread.Sleep(2000);
             }
-        }
-
-        private static void WorkerRun()
-        {
+            while(true);
+            
             var _appConfiguration = _serviceProvider.GetService<IOptionsSnapshot<AppConfiguration>>();
             Console.WriteLine($"MessagingQueue: {_appConfiguration.Value.MessagingQueue}");
             var factory = new ConnectionFactory() { HostName = _appConfiguration.Value.Messaging };
@@ -108,8 +87,8 @@ namespace Ticketing.Worker
             factory.Password = _appConfiguration.Value.MessagingPassword;
             do
             {
-                using (var connection = factory.CreateConnection())
-                using (var channel = connection.CreateModel())
+                using (var queueConnection = factory.CreateConnection())
+                using (var channel = queueConnection.CreateModel())
                 {
                     channel.QueueDeclare(queue: _appConfiguration.Value.MessagingQueue, durable: false, exclusive: false, autoDelete: false, arguments: null);
 
@@ -121,7 +100,6 @@ namespace Ticketing.Worker
                         Console.WriteLine(" [x] Received {0}", message);
                     };
                     channel.BasicConsume(queue: _appConfiguration.Value.MessagingQueue, autoAck: true, consumer: consumer);
-                    Thread.Sleep(2000);
                 }
             } while (true);
         }
