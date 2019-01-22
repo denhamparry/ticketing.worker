@@ -22,7 +22,7 @@ namespace Ticketing.Worker
         {
             string env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
             workerName = Environment.GetEnvironmentVariable("WORKER_NAME") ?? workerName;
-            url = Environment.GetEnvironmentVariable("WORKER_NAME") ?? url;
+            url = Environment.GetEnvironmentVariable("URL") ?? url;
 
             var builder = new ConfigurationBuilder()
                 .SetBasePath(Directory.GetCurrentDirectory())
@@ -46,7 +46,8 @@ namespace Ticketing.Worker
             serviceCollection.Configure<AppConfiguration>(configuration.GetSection("AppConfiguration"));
             _serviceProvider = serviceCollection.BuildServiceProvider();
 
-            await EchoAsync();
+            // await EchoAsync();
+            WorkerRun();
         }
 
         private static async Task EchoAsync()
@@ -102,6 +103,8 @@ namespace Ticketing.Worker
         {
             var _appConfiguration = _serviceProvider.GetService<IOptionsSnapshot<AppConfiguration>>();
             Console.WriteLine($"MessagingQueue: {_appConfiguration.Value.MessagingQueue}");
+            Console.WriteLine($"MessagingQueue: {_appConfiguration.Value.Messaging}");
+            Console.WriteLine($"MessagingQueue: {_appConfiguration.Value.MessagingUsername}");
             var factory = new ConnectionFactory() { HostName = _appConfiguration.Value.Messaging };
             factory.UserName = _appConfiguration.Value.MessagingUsername;
             factory.Password = _appConfiguration.Value.MessagingPassword;
