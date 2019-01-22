@@ -22,5 +22,15 @@ namespace Ticketing.Worker
             get;
             set;
         }
+        public string WorkerName
+        {
+            get;
+            set;
+        }
+        public string SignalR
+        {
+            get;
+            set;
+        }
     }
 }

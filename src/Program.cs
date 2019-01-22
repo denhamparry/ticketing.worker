@@ -2,8 +2,11 @@
 using System.IO;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
@@ -13,7 +16,9 @@ namespace Ticketing.Worker
     class Program
     {
         private static IServiceProvider _serviceProvider;
-        static void Main(string[] args)
+        private static HubConnection connection;
+
+        static async Task Main(string[] args)
         {
             string env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
 
@@ -39,34 +44,48 @@ namespace Ticketing.Worker
             serviceCollection.Configure<AppConfiguration>(configuration.GetSection("AppConfiguration"));
             _serviceProvider = serviceCollection.BuildServiceProvider();
 
-            WorkerRun();
+
+            await WorkerRunAsync();
         }
 
-        private static void WorkerRun()
+        private static async Task WorkerRunAsync()
         {
             var _appConfiguration = _serviceProvider.GetService<IOptionsSnapshot<AppConfiguration>>();
-            Console.WriteLine($"MessagingQueue: {_appConfiguration.Value.MessagingQueue}");
+            Console.WriteLine($"Worker name: {_appConfiguration.Value.WorkerName} | MessagingQueue: {_appConfiguration.Value.MessagingQueue} | Username: {_appConfiguration.Value.MessagingUsername} | SignalR: {_appConfiguration.Value.SignalR}");
+
+            // SignalR
+            connection = new HubConnectionBuilder()
+                .WithUrl(_appConfiguration.Value.SignalR)
+                .ConfigureLogging(logging =>
+                {
+                    logging.AddConsole();
+                })
+                .AddMessagePackProtocol()
+                .Build();
+            await connection.StartAsync();
+            await connection.SendAsync("broadcastMessage", _appConfiguration.Value.WorkerName, "New challenger approaching!");
+
+            // RabbitMQ
             var factory = new ConnectionFactory() { HostName = _appConfiguration.Value.Messaging };
             factory.UserName = _appConfiguration.Value.MessagingUsername;
             factory.Password = _appConfiguration.Value.MessagingPassword;
-            do
+            using (var queueConnection = factory.CreateConnection())
+            using (var channel = queueConnection.CreateModel())
             {
-                using (var connection = factory.CreateConnection())
-                using (var channel = connection.CreateModel())
-                {
-                    channel.QueueDeclare(queue: _appConfiguration.Value.MessagingQueue, durable: false, exclusive: false, autoDelete: false, arguments: null);
+                var body = channel.BasicGet(_appConfiguration.Value.MessagingQueue, true).Body;
+                var message = Encoding.UTF8.GetString(body);
+                await SendMessage($"[x] Received {message}");
+                Thread.Sleep(1000);
+                await SendMessage("Processing...");
+                Thread.Sleep(4000);
+                await SendMessage("Compelted, ta ra!");
+            }
+        }
 
-                    var consumer = new EventingBasicConsumer(channel);
-                    consumer.Received += (model, ea) =>
-                    {
-                        var body = ea.Body;
-                        var message = Encoding.UTF8.GetString(body);
-                        Console.WriteLine(" [x] Received {0}", message);
-                    };
-                    channel.BasicConsume(queue: _appConfiguration.Value.MessagingQueue, autoAck: true, consumer: consumer);
-                    Thread.Sleep(2000);
-                }
-            } while (true);
+        private static async Task SendMessage(string message)
+        {
+            Console.WriteLine(message);
+            await connection.SendAsync("echo", message);
         }
     }
 }
