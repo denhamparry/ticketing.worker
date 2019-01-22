@@ -18,11 +18,11 @@ namespace Ticketing.Worker
         private static IServiceProvider _serviceProvider;
         private static string workerName = "default";
         private static string url = "http://localhost:5000/workers";
-        static void Main(string[] args)
+        private static HubConnection connection;
+
+        static async Task Main(string[] args)
         {
             string env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
-            workerName = Environment.GetEnvironmentVariable("WORKER_NAME") ?? workerName;
-            url = Environment.GetEnvironmentVariable("URL") ?? url;
 
             var builder = new ConfigurationBuilder()
                 .SetBasePath(Directory.GetCurrentDirectory())
@@ -41,13 +41,56 @@ namespace Ticketing.Worker
 
             var configuration = builder.Build();
 
+            connection = new HubConnectionBuilder()
+                .WithUrl(url)
+                .ConfigureLogging(logging =>
+                {
+                    logging.AddConsole();
+                })
+                .AddMessagePackProtocol()
+                .Build();
+
+            await connection.StartAsync();
+            
+            await connection.SendAsync("broadcastMessage", workerName, "I've joined the channel");
+
             var serviceCollection = new ServiceCollection();
             serviceCollection.AddOptions();
             serviceCollection.Configure<AppConfiguration>(configuration.GetSection("AppConfiguration"));
             _serviceProvider = serviceCollection.BuildServiceProvider();
 
-            // await EchoAsync();
+
             WorkerRun();
+        }
+
+        private static void WorkerRun()
+        {
+            var _appConfiguration = _serviceProvider.GetService<IOptionsSnapshot<AppConfiguration>>();
+            Console.WriteLine($"MessagingQueue: {_appConfiguration.Value.MessagingQueue}");
+            var factory = new ConnectionFactory() { HostName = _appConfiguration.Value.Messaging };
+            factory.UserName = _appConfiguration.Value.MessagingUsername;
+            factory.Password = _appConfiguration.Value.MessagingPassword;
+            using (var connection = factory.CreateConnection())
+            {
+                using (var channel = connection.CreateModel())
+                {
+                    channel.QueueDeclare(queue: _appConfiguration.Value.MessagingQueue, durable: false, exclusive: false, autoDelete: false, arguments: null);
+                    var consumer = new EventingBasicConsumer(channel);
+                    consumer.Received += async (model, ea) =>
+                    {
+                        await ProcessTaskAsync(model, ea);
+                    };
+                    channel.BasicConsume(queue: _appConfiguration.Value.MessagingQueue, autoAck: true, consumer: consumer);
+                }
+            }
+        }
+
+        private static async Task ProcessTaskAsync(object model, BasicDeliverEventArgs ea)
+        {
+            var body = ea.Body;
+            var message = $"{workerName} [x] Received {Encoding.UTF8.GetString(body)}";
+            Console.WriteLine(message);
+            await connection.SendAsync("echo", message);
         }
 
         private static async Task EchoAsync()
@@ -98,34 +141,5 @@ namespace Ticketing.Worker
             return;
 
         }
-        
-        private static void WorkerRun()
-        {
-            var _appConfiguration = _serviceProvider.GetService<IOptionsSnapshot<AppConfiguration>>();
-            Console.WriteLine($"MessagingQueue: {_appConfiguration.Value.MessagingQueue}");
-            Console.WriteLine($"MessagingQueue: {_appConfiguration.Value.Messaging}");
-            Console.WriteLine($"MessagingQueue: {_appConfiguration.Value.MessagingUsername}");
-            var factory = new ConnectionFactory() { HostName = _appConfiguration.Value.Messaging };
-            factory.UserName = _appConfiguration.Value.MessagingUsername;
-            factory.Password = _appConfiguration.Value.MessagingPassword;
-            do
-            {
-                using (var queueConnection = factory.CreateConnection())
-                using (var channel = queueConnection.CreateModel())
-                {
-                    channel.QueueDeclare(queue: _appConfiguration.Value.MessagingQueue, durable: false, exclusive: false, autoDelete: false, arguments: null);
-
-                    var consumer = new EventingBasicConsumer(channel);
-                    consumer.Received += (model, ea) =>
-                    {
-                        var body = ea.Body;
-                        var message = Encoding.UTF8.GetString(body);
-                        Console.WriteLine(" [x] Received {0}", message);
-                    };
-                    channel.BasicConsume(queue: _appConfiguration.Value.MessagingQueue, autoAck: true, consumer: consumer);
-                }
-            } while (true);
-        }
-
     }
 }
