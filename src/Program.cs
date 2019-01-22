@@ -18,7 +18,7 @@ namespace Ticketing.Worker
         private static IServiceProvider _serviceProvider;
         private static string workerName = "default";
         private static string url = "http://localhost:5000/workers";
-        static async System.Threading.Tasks.Task Main(string[] args)
+        static void Main(string[] args)
         {
             string env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
             workerName = Environment.GetEnvironmentVariable("WORKER_NAME") ?? workerName;
