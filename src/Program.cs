@@ -16,9 +16,13 @@ namespace Ticketing.Worker
     class Program
     {
         private static IServiceProvider _serviceProvider;
+        private static string workerName = "default";
+        private static string url = "http://localhost:5000/workers";
         static async System.Threading.Tasks.Task Main(string[] args)
         {
             string env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+            workerName = Environment.GetEnvironmentVariable("WORKER_NAME") ?? workerName;
+            url = Environment.GetEnvironmentVariable("WORKER_NAME") ?? url;
 
             var builder = new ConfigurationBuilder()
                 .SetBasePath(Directory.GetCurrentDirectory())
@@ -42,13 +46,13 @@ namespace Ticketing.Worker
             serviceCollection.Configure<AppConfiguration>(configuration.GetSection("AppConfiguration"));
             _serviceProvider = serviceCollection.BuildServiceProvider();
 
-            await WorkerRunAsync();
+            await EchoAsync();
         }
 
-        private static async Task WorkerRunAsync()
+        private static async Task EchoAsync()
         {
             var connection = new HubConnectionBuilder()
-                .WithUrl("http://localhost:5000/workers")
+                .WithUrl(url)
                 .ConfigureLogging(logging =>
                 {
                     logging.AddConsole();
@@ -72,14 +76,30 @@ namespace Ticketing.Worker
                 cts.Cancel();
                 return Task.CompletedTask;
             };
+            
+            await connection.SendAsync("broadcastMessage", workerName, "I've joined the channel");
+            bool enableLoop = true;
 
             do
             {
-                await connection.SendAsync("alive", "lewis");
-                Thread.Sleep(2000);
+                try
+                {
+                await connection.SendAsync("echo", workerName);
+                    Thread.Sleep(2000);
+                }
+                catch
+                {
+                    Console.WriteLine("Connection is shutting down due to an error.");
+                    enableLoop = false;
+                }
             }
-            while(true);
-            
+            while(enableLoop);
+            return;
+
+        }
+        
+        private static void WorkerRun()
+        {
             var _appConfiguration = _serviceProvider.GetService<IOptionsSnapshot<AppConfiguration>>();
             Console.WriteLine($"MessagingQueue: {_appConfiguration.Value.MessagingQueue}");
             var factory = new ConnectionFactory() { HostName = _appConfiguration.Value.Messaging };
@@ -104,24 +124,5 @@ namespace Ticketing.Worker
             } while (true);
         }
 
-    }
-    
-    public class Stock
-    {
-        public string Symbol { get; set; }
-
-        public decimal DayOpen { get; private set; }
-
-        public decimal DayLow { get; private set; }
-
-        public decimal DayHigh { get; private set; }
-
-        public decimal LastChange { get; private set; }
-
-        public decimal Change { get; set; }
-
-        public double PercentChange { get; set; }
-
-        public decimal Price { get; set; }
     }
 }
