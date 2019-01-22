@@ -2,8 +2,11 @@
 using System.IO;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
@@ -13,7 +16,7 @@ namespace Ticketing.Worker
     class Program
     {
         private static IServiceProvider _serviceProvider;
-        static void Main(string[] args)
+        static async System.Threading.Tasks.Task Main(string[] args)
         {
             string env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
 
@@ -39,7 +42,61 @@ namespace Ticketing.Worker
             serviceCollection.Configure<AppConfiguration>(configuration.GetSection("AppConfiguration"));
             _serviceProvider = serviceCollection.BuildServiceProvider();
 
-            WorkerRun();
+            var connection = new HubConnectionBuilder()
+                .WithUrl("http://localhost:5000/workers")
+                .ConfigureLogging(logging =>
+                {
+                    logging.AddConsole();
+                })
+                .AddMessagePackProtocol()
+                .Build();
+
+            await connection.StartAsync();
+
+            Console.WriteLine("Starting connection. Press Ctrl-C to close.");
+
+            Console.WriteLine("Starting connection. Press Ctrl-C to close.");
+            var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (sender, a) =>
+            {
+                a.Cancel = true;
+                cts.Cancel();
+            };
+
+            connection.Closed += e =>
+            {
+                Console.WriteLine("Connection closed with error: {0}", e);
+
+                cts.Cancel();
+                return Task.CompletedTask;
+            };
+
+
+            connection.On("marketOpened", () =>
+            {
+                Console.WriteLine("Market opened");
+            });
+
+            connection.On("marketClosed", () =>
+            {
+                Console.WriteLine("Market closed");
+            });
+
+            connection.On("marketReset", () =>
+            {
+                Console.WriteLine("Reset recieved");
+
+                cts.Cancel();
+            });
+
+            var channel = await connection.StreamAsChannelAsync<Stock>("StreamStocks", CancellationToken.None);
+            while (await channel.WaitToReadAsync() && !cts.IsCancellationRequested)
+            {
+                while (channel.TryRead(out var stock))
+                {
+                    Console.WriteLine($"{stock.Symbol} {stock.Price}");
+                }
+            }
         }
 
         private static void WorkerRun()
@@ -68,5 +125,25 @@ namespace Ticketing.Worker
                 }
             } while (true);
         }
+
+    }
+    
+    public class Stock
+    {
+        public string Symbol { get; set; }
+
+        public decimal DayOpen { get; private set; }
+
+        public decimal DayLow { get; private set; }
+
+        public decimal DayHigh { get; private set; }
+
+        public decimal LastChange { get; private set; }
+
+        public decimal Change { get; set; }
+
+        public double PercentChange { get; set; }
+
+        public decimal Price { get; set; }
     }
 }
