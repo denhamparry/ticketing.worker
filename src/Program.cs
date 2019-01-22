@@ -16,8 +16,6 @@ namespace Ticketing.Worker
     class Program
     {
         private static IServiceProvider _serviceProvider;
-        private static string workerName = "default";
-        private static string url = "http://localhost:5000/workers";
         private static HubConnection connection;
 
         static async Task Main(string[] args)
@@ -41,19 +39,6 @@ namespace Ticketing.Worker
 
             var configuration = builder.Build();
 
-            connection = new HubConnectionBuilder()
-                .WithUrl(url)
-                .ConfigureLogging(logging =>
-                {
-                    logging.AddConsole();
-                })
-                .AddMessagePackProtocol()
-                .Build();
-
-            await connection.StartAsync();
-
-            await connection.SendAsync("broadcastMessage", workerName, "New challenger approaching!");
-            
             var serviceCollection = new ServiceCollection();
             serviceCollection.AddOptions();
             serviceCollection.Configure<AppConfiguration>(configuration.GetSection("AppConfiguration"));
@@ -66,7 +51,21 @@ namespace Ticketing.Worker
         private static async Task WorkerRunAsync()
         {
             var _appConfiguration = _serviceProvider.GetService<IOptionsSnapshot<AppConfiguration>>();
-            await SendMessage($"Worker name: {_appConfiguration.Value.WorkerName} | MessagingQueue: {_appConfiguration.Value.MessagingQueue} | Username: {_appConfiguration.Value.MessagingUsername}");
+            Console.WriteLine($"Worker name: {_appConfiguration.Value.WorkerName} | MessagingQueue: {_appConfiguration.Value.MessagingQueue} | Username: {_appConfiguration.Value.MessagingUsername} | SignalR: {_appConfiguration.Value.SignalR}");
+
+            // SignalR
+            connection = new HubConnectionBuilder()
+                .WithUrl(_appConfiguration.Value.SignalR)
+                .ConfigureLogging(logging =>
+                {
+                    logging.AddConsole();
+                })
+                .AddMessagePackProtocol()
+                .Build();
+            await connection.StartAsync();
+            await connection.SendAsync("broadcastMessage", _appConfiguration.Value.WorkerName, "New challenger approaching!");
+
+            // RabbitMQ
             var factory = new ConnectionFactory() { HostName = _appConfiguration.Value.Messaging };
             factory.UserName = _appConfiguration.Value.MessagingUsername;
             factory.Password = _appConfiguration.Value.MessagingPassword;
