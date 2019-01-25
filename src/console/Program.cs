@@ -68,6 +68,35 @@ namespace Ticketing.Worker
             await connection.StartAsync();
             await connection.SendAsync("broadcastMessage", _appConfiguration.Value.WorkerName, "New challenger approaching!");
 
+            //ToDo: manage cancellations
+            // Console.WriteLine("Starting connection. Press Ctrl-C to close.");
+            // var cts = new CancellationTokenSource();
+            // Console.CancelKeyPress += (sender, a) =>
+            // {
+            //     a.Cancel = true;
+            //     cts.Cancel();
+            // };
+
+            // connection.Closed += e =>
+            // {
+            //     Console.WriteLine("Connection closed with error: {0}", e);
+
+            //     cts.Cancel();
+            //     return Task.CompletedTask;
+            // };
+
+            connection.On<string, string>("group",
+                (string name, string message) =>
+                {
+                    Console.WriteLine($"[{DateTime.Now.ToString()}] group message received from {name}: {message}");
+                });
+
+            connection.On<string, string>("broadcastMessage",
+                (string name, string message) =>
+                {
+                    Console.WriteLine($"[{DateTime.Now.ToString()}] received message from server: {message}");
+                });
+
             // RabbitMQ
             var factory = new ConnectionFactory() { HostName = _appConfiguration.Value.Messaging };
             factory.UserName = _appConfiguration.Value.MessagingUsername;
@@ -86,27 +115,30 @@ namespace Ticketing.Worker
                 AssemblyLoadContext.Default.Unloading += Default_Unloading;
 
                 using (var queueConnection = factory.CreateConnection())
-                using (var channel = queueConnection.CreateModel())
+                using (var queueChannel = queueConnection.CreateModel())
                 {
                     do
                     {
-                        var ea = channel.BasicGet(_appConfiguration.Value.MessagingQueue, true);
+                        var ea = queueChannel.BasicGet(_appConfiguration.Value.MessagingQueue, true);
                         if (ea == null)
                         {
-                            await SendMessage($"[ ] no work to do, having a break");
+                            await SendMessage(_appConfiguration.Value.WorkerName, "[ ] no work to do, having a break");
                             Thread.Sleep(5000);
                         }
                         else
                         {
+                            var groupName = "TestGroup";
+                            await connection.InvokeAsync("JoinGroup", _appConfiguration.Value.WorkerName, groupName);
                             var message = Encoding.UTF8.GetString(ea.Body);
-                            await SendMessage($"[x] Received {message}");
+                            await SendGroupMessage(_appConfiguration.Value.WorkerName, groupName, $"[x] Received {message}");
                             Thread.Sleep(1000);
-                            await SendMessage("Processing...");
+                            await SendGroupMessage(_appConfiguration.Value.WorkerName, groupName, "Processing...");
                             Thread.Sleep(4000);
-                            await SendMessage("Compelted, ta ra!");
+                            await SendGroupMessage(_appConfiguration.Value.WorkerName, groupName, "Compelted, ta ra!");
+                            await connection.InvokeAsync("LeaveGroup", _appConfiguration.Value.WorkerName, groupName);
                         }
                     } while (workIt);
-                    await SendMessage($"{_appConfiguration.Value.WorkerName} finishing their shift, good night!");
+                    await SendMessage(_appConfiguration.Value.WorkerName, "finishing my shift, good night!");
                 }
                 _Shutdown.WaitOne();
                 return 0;
@@ -123,10 +155,14 @@ namespace Ticketing.Worker
             return 1;
         }
 
-        private static async Task SendMessage(string message)
+        private static async Task SendMessage(string name, string message)
         {
-            Console.WriteLine(message);
-            await connection.SendAsync("echo", message);
+            await connection.SendAsync("broadcastMessage", name, message);
+        }
+
+        public static async Task SendGroupMessage(string name, string groupName, string message)
+        {
+            await connection.SendAsync("SendGroup", name, groupName, message);
         }
 
         private static void Default_Unloading(AssemblyLoadContext obj)
