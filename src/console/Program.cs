@@ -91,6 +91,12 @@ namespace Ticketing.Worker
                     Console.WriteLine($"[{DateTime.Now.ToString()}] group message received from {name}: {message}");
                 });
 
+            connection.On<string, string>("completed",
+                (string name, string message) =>
+                {
+                    // Do nothing
+                });
+
             connection.On<string, string>("broadcastMessage",
                 (string name, string message) =>
                 {
@@ -135,6 +141,7 @@ namespace Ticketing.Worker
                             await SendGroupMessage(_appConfiguration.Value.WorkerName, groupName, "Processing...");
                             Thread.Sleep(4000);
                             await SendGroupMessage(_appConfiguration.Value.WorkerName, groupName, "Compelted, ta ra!");
+                            await SendGroupCompleteMessage(_appConfiguration.Value.WorkerName, groupName, "https://www.youtube.com/watch?v=IxAKFlpdcfc");
                             await connection.InvokeAsync("LeaveGroup", _appConfiguration.Value.WorkerName, groupName);
                         }
                     } while (workIt);
@@ -163,6 +170,11 @@ namespace Ticketing.Worker
         public static async Task SendGroupMessage(string name, string groupName, string message)
         {
             await connection.SendAsync("SendGroup", name, groupName, message);
+        }
+
+        public static async Task SendGroupCompleteMessage(string name, string groupName, string message)
+        {
+            await connection.SendAsync("SendGroupComplete", name, groupName, message);
         }
 
         private static void Default_Unloading(AssemblyLoadContext obj)
