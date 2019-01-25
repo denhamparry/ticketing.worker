@@ -9,8 +9,10 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Newtonsoft.Json;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using Ticketing.Worker.Models;
 
 namespace Ticketing.Worker
 {
@@ -91,8 +93,8 @@ namespace Ticketing.Worker
                     Console.WriteLine($"[{DateTime.Now.ToString()}] group message received from {name}: {message}");
                 });
 
-            connection.On<string, string>("completed",
-                (string name, string message) =>
+            connection.On<string>("completed",
+                (string message) =>
                 {
                     // Do nothing
                 });
@@ -133,9 +135,10 @@ namespace Ticketing.Worker
                         }
                         else
                         {
-                            var groupName = "TestGroup";
-                            await connection.InvokeAsync("JoinGroup", _appConfiguration.Value.WorkerName, groupName);
                             var message = Encoding.UTF8.GetString(ea.Body);
+                            var ticket = JsonConvert.DeserializeObject<TicketModel>(message);
+                            var groupName = ticket.Id;
+                            await connection.InvokeAsync("JoinGroup", _appConfiguration.Value.WorkerName, groupName);
                             await SendGroupMessage(_appConfiguration.Value.WorkerName, groupName, $"[x] Received {message}");
                             Thread.Sleep(1000);
                             await SendGroupMessage(_appConfiguration.Value.WorkerName, groupName, "Processing...");
