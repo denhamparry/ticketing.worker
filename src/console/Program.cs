@@ -57,7 +57,7 @@ namespace Ticketing.Worker
         {
             var _appConfiguration = _serviceProvider.GetService<IOptionsSnapshot<AppConfiguration>>();
             Console.WriteLine($"Worker name: {_appConfiguration.Value.WorkerName} | MessagingQueue: {_appConfiguration.Value.MessagingQueue} | Username: {_appConfiguration.Value.MessagingUsername} | SignalR: {_appConfiguration.Value.SignalR}");
-
+            
             // SignalR
             connection = new HubConnectionBuilder()
                 .WithUrl(_appConfiguration.Value.SignalR)
@@ -68,24 +68,25 @@ namespace Ticketing.Worker
                 .AddMessagePackProtocol()
                 .Build();
             await connection.StartAsync();
+
             await connection.SendAsync("broadcastMessage", _appConfiguration.Value.WorkerName, "New challenger approaching!");
 
-            //ToDo: manage cancellations
-            // Console.WriteLine("Starting connection. Press Ctrl-C to close.");
-            // var cts = new CancellationTokenSource();
-            // Console.CancelKeyPress += (sender, a) =>
-            // {
-            //     a.Cancel = true;
-            //     cts.Cancel();
-            // };
+            Console.WriteLine("Starting connection. Press Ctrl-C to close.");
+            var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (sender, a) =>
+            {
+                Shutdown();
+                a.Cancel = true;
+                cts.Cancel();
+            };
 
-            // connection.Closed += e =>
-            // {
-            //     Console.WriteLine("Connection closed with error: {0}", e);
-
-            //     cts.Cancel();
-            //     return Task.CompletedTask;
-            // };
+            connection.Closed += e =>
+            {
+                Console.WriteLine("Connection closed with error: {0}", e);
+                Shutdown();
+                cts.Cancel();
+                return Task.CompletedTask;
+            };
 
             connection.On<string, string>("group",
                 (string name, string message) =>
@@ -180,12 +181,17 @@ namespace Ticketing.Worker
             await connection.SendAsync("SendGroupComplete", name, groupName, message);
         }
 
-        private static void Default_Unloading(AssemblyLoadContext obj)
+        private static void Shutdown()
         {
-            Console.WriteLine($"Shutting down in response to SIGTERM.");
             workIt = false;
             _Shutdown.Set();
             _Complete.Wait();
+        }
+
+        private static void Default_Unloading(AssemblyLoadContext obj)
+        {
+            Console.WriteLine($"Shutting down in response to SIGTERM.");
+            Shutdown();
         }
     }
 }
