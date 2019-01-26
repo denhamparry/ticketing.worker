@@ -156,8 +156,8 @@ namespace Ticketing.Worker
                         }
                         catch
                         {
-                            await SendMessage(_appConfiguration.Value.WorkerName, "something went wrong, will try again in 5 seconds");
-                            Thread.Sleep(5000);
+                            await SendMessage(_appConfiguration.Value.WorkerName, "something went wrong, will let someone else deal with it...");
+                            workIt = false;
                         }
                     } while (workIt);
                     await SendMessage(_appConfiguration.Value.WorkerName, "finishing my shift, good night!");
