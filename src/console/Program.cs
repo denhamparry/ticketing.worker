@@ -11,18 +11,18 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using RabbitMQ.Client;
-using RabbitMQ.Client.Events;
 using Ticketing.Worker.Models;
 
 namespace Ticketing.Worker
 {
     class Program
     {
-        public static ManualResetEvent _Shutdown = new ManualResetEvent(false);
-        public static ManualResetEventSlim _Complete = new ManualResetEventSlim();
         private static IServiceProvider _serviceProvider;
         private static HubConnection connection;
         private static bool workIt = true;
+        private static CancellationTokenSource cts;
+        private static ManualResetEvent _Shutdown = new ManualResetEvent(false);
+        private static ManualResetEventSlim _Complete = new ManualResetEventSlim();
 
         static async Task Main(string[] args)
         {
@@ -35,7 +35,7 @@ namespace Ticketing.Worker
 
             if (!string.IsNullOrWhiteSpace(env))
             {
-                Console.WriteLine($"ASPNETCORE_ENVIRONMENT env variable set to {env}.");
+                SendLocalMessage($"ASPNETCORE_ENVIRONMENT env variable set to {env}.");
                 builder = new ConfigurationBuilder()
                     .SetBasePath(Directory.GetCurrentDirectory())
                     .AddJsonFile($"appsettings.json", optional: false, reloadOnChange: false)
@@ -50,13 +50,28 @@ namespace Ticketing.Worker
             serviceCollection.Configure<AppConfiguration>(configuration.GetSection("AppConfiguration"));
             _serviceProvider = serviceCollection.BuildServiceProvider();
 
+            SendLocalMessage("Starting connection. Press Ctrl-C to close.");
+            cts = new CancellationTokenSource();
+
+            Console.CancelKeyPress += (sender, a) =>
+            {
+                SendLocalMessage($"Cancel key pressed...");
+                workIt = false;
+                _Complete.Wait();
+                SendLocalMessage($"Cancel completed!");
+            };
+
+            AssemblyLoadContext.Default.Unloading += Default_Unloading;
+
             await WorkerRunAsync();
+
+            return;
         }
 
-        private static async Task<int> WorkerRunAsync()
+        private static async Task WorkerRunAsync()
         {
             var _appConfiguration = _serviceProvider.GetService<IOptionsSnapshot<AppConfiguration>>();
-            Console.WriteLine($"Worker name: {_appConfiguration.Value.WorkerName} | MessagingQueue: {_appConfiguration.Value.MessagingQueue} | Username: {_appConfiguration.Value.MessagingUsername} | SignalR: {_appConfiguration.Value.SignalR}");
+            SendLocalMessage($"Worker name: {_appConfiguration.Value.WorkerName} | MessagingQueue: {_appConfiguration.Value.MessagingQueue} | Username: {_appConfiguration.Value.MessagingUsername} | SignalR: {_appConfiguration.Value.SignalR}");
 
             // SignalR
             connection = new HubConnectionBuilder()
@@ -68,29 +83,21 @@ namespace Ticketing.Worker
                 .AddMessagePackProtocol()
                 .Build();
             await connection.StartAsync();
-            await connection.SendAsync("broadcastMessage", _appConfiguration.Value.WorkerName, "New challenger approaching!");
 
-            //ToDo: manage cancellations
-            // Console.WriteLine("Starting connection. Press Ctrl-C to close.");
-            // var cts = new CancellationTokenSource();
-            // Console.CancelKeyPress += (sender, a) =>
-            // {
-            //     a.Cancel = true;
-            //     cts.Cancel();
-            // };
+            connection.Closed += e =>
+            {
+                SendLocalMessage($"Connection closed with error: {e}");
+                cts.Cancel();
+                Shutdown();
+                return Task.CompletedTask;
+            };
 
-            // connection.Closed += e =>
-            // {
-            //     Console.WriteLine("Connection closed with error: {0}", e);
-
-            //     cts.Cancel();
-            //     return Task.CompletedTask;
-            // };
+            await SendMessage(_appConfiguration.Value.WorkerName, "New challenger approaching!");
 
             connection.On<string, string>("group",
                 (string name, string message) =>
                 {
-                    Console.WriteLine($"[{DateTime.Now.ToString()}] group message received from {name}: {message}");
+                    SendLocalMessage($"[{DateTime.Now.ToString()}] group message received from {name}: {message}");
                 });
 
             connection.On<string>("completed",
@@ -102,7 +109,7 @@ namespace Ticketing.Worker
             connection.On<string, string>("broadcastMessage",
                 (string name, string message) =>
                 {
-                    Console.WriteLine($"[{DateTime.Now.ToString()}] received message from server: {message}");
+                    SendLocalMessage($"[{DateTime.Now.ToString()}] received message from server: {message}");
                 });
 
             // RabbitMQ
@@ -117,75 +124,124 @@ namespace Ticketing.Worker
                 var ended = new ManualResetEventSlim();
                 var starting = new ManualResetEventSlim();
 
-                Console.WriteLine("Starting application...");
-
-                // Capture SIGTERM  
-                AssemblyLoadContext.Default.Unloading += Default_Unloading;
+                SendLocalMessage("Starting application...");
 
                 using (var queueConnection = factory.CreateConnection())
                 using (var queueChannel = queueConnection.CreateModel())
                 {
                     do
                     {
-                        var ea = queueChannel.BasicGet(_appConfiguration.Value.MessagingQueue, true);
-                        if (ea == null)
+                        try
                         {
-                            await SendMessage(_appConfiguration.Value.WorkerName, "[ ] no work to do, having a break");
-                            Thread.Sleep(5000);
+                            var ea = queueChannel.BasicGet(_appConfiguration.Value.MessagingQueue, true);
+                            if (ea == null)
+                            {
+                                await SendMessage(_appConfiguration.Value.WorkerName, "[ ] no work to do, having a break");
+                                Thread.Sleep(5000);
+                            }
+                            else
+                            {
+                                var message = Encoding.UTF8.GetString(ea.Body);
+                                var ticket = JsonConvert.DeserializeObject<TicketModel>(message);
+                                var groupName = ticket.Id;
+                                await connection.InvokeAsync("JoinGroup", _appConfiguration.Value.WorkerName, groupName);
+                                await SendGroupMessage(_appConfiguration.Value.WorkerName, groupName, $"[x] Received {message}");
+                                Thread.Sleep(1000);
+                                await SendGroupMessage(_appConfiguration.Value.WorkerName, groupName, "Processing...");
+                                Thread.Sleep(4000);
+                                await SendGroupMessage(_appConfiguration.Value.WorkerName, groupName, "Compelted, ta ra!");
+                                await SendGroupCompleteMessage(_appConfiguration.Value.WorkerName, groupName, "https://www.youtube.com/watch?v=IxAKFlpdcfc");
+                                await connection.InvokeAsync("LeaveGroup", _appConfiguration.Value.WorkerName, groupName);
+                            }
                         }
-                        else
+                        catch
                         {
-                            var message = Encoding.UTF8.GetString(ea.Body);
-                            var ticket = JsonConvert.DeserializeObject<TicketModel>(message);
-                            var groupName = ticket.Id;
-                            await connection.InvokeAsync("JoinGroup", _appConfiguration.Value.WorkerName, groupName);
-                            await SendGroupMessage(_appConfiguration.Value.WorkerName, groupName, $"[x] Received {message}");
-                            Thread.Sleep(1000);
-                            await SendGroupMessage(_appConfiguration.Value.WorkerName, groupName, "Processing...");
-                            Thread.Sleep(4000);
-                            await SendGroupMessage(_appConfiguration.Value.WorkerName, groupName, "Compelted, ta ra!");
-                            await SendGroupCompleteMessage(_appConfiguration.Value.WorkerName, groupName, "https://www.youtube.com/watch?v=IxAKFlpdcfc");
-                            await connection.InvokeAsync("LeaveGroup", _appConfiguration.Value.WorkerName, groupName);
+                            await SendMessage(_appConfiguration.Value.WorkerName, "something went wrong, will let someone else deal with it...");
+                            workIt = false;
                         }
                     } while (workIt);
                     await SendMessage(_appConfiguration.Value.WorkerName, "finishing my shift, good night!");
                 }
-                _Shutdown.WaitOne();
-                return 0;
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.Message);
+                SendLocalMessage($"We've had a problem: {ex.Message}");
             }
             finally
             {
+                SendLocalMessage($"Cleaning up resources");
                 await connection.DisposeAsync();
-                Console.WriteLine("Cleaning up resources");
             }
-            return 1;
+            _Complete.Set();
+            SendLocalMessage($"WorkerRunAsync ---fin---");
+            return;
+        }
+
+        private static void SendLocalMessage(string message)
+        {
+            Console.WriteLine($"Local: [{DateTime.Now.ToString()}] | {message}");
+        }
+
+        private static void SendLocalMessage(string message, string name)
+        {
+            Console.WriteLine($"Local: [{DateTime.Now.ToString()}] {name} | {message}");
+        }
+
+        private static void SendLocalMessage(string name, string message, string groupName)
+        {
+            SendLocalMessage($"{groupName}/{name}", message);
         }
 
         private static async Task SendMessage(string name, string message)
         {
-            await connection.SendAsync("broadcastMessage", name, message);
+            try
+            {
+                await connection.SendAsync("broadcastMessage", name, message);
+            }
+            catch
+            {
+                SendLocalMessage(message, name);
+            }
         }
 
-        public static async Task SendGroupMessage(string name, string groupName, string message)
+        private static async Task SendGroupMessage(string name, string groupName, string message)
         {
-            await connection.SendAsync("SendGroup", name, groupName, message);
+            try
+            {
+                await connection.SendAsync("SendGroup", name, groupName, message);
+            }
+            catch
+            {
+                SendLocalMessage(message, name, groupName);
+            }
         }
 
-        public static async Task SendGroupCompleteMessage(string name, string groupName, string message)
+        private static async Task SendGroupCompleteMessage(string name, string groupName, string message)
         {
-            await connection.SendAsync("SendGroupComplete", name, groupName, message);
+            try
+            {
+                await connection.SendAsync("SendGroupComplete", name, groupName, message);
+            }
+            catch
+            {
+                SendLocalMessage(message, name, groupName);
+            }
         }
 
         private static void Default_Unloading(AssemblyLoadContext obj)
         {
-            Console.WriteLine($"Shutting down in response to SIGTERM.");
+            SendLocalMessage($"Shutting down in response to SIGTERM.");
+            Shutdown();
+        }
+
+        private static void Shutdown()
+        {
+            SendLocalMessage($"Shutdown starting");
+            cts.Cancel();
             workIt = false;
             _Shutdown.Set();
             _Complete.Wait();
+            SendLocalMessage($"Shutdown completed!");
         }
     }
 }
