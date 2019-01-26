@@ -11,18 +11,18 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using RabbitMQ.Client;
-using RabbitMQ.Client.Events;
 using Ticketing.Worker.Models;
 
 namespace Ticketing.Worker
 {
     class Program
     {
-        public static ManualResetEvent _Shutdown = new ManualResetEvent(false);
-        public static ManualResetEventSlim _Complete = new ManualResetEventSlim();
         private static IServiceProvider _serviceProvider;
         private static HubConnection connection;
         private static bool workIt = true;
+        private static CancellationTokenSource cts;
+        private static ManualResetEvent _Shutdown = new ManualResetEvent(false);
+        private static ManualResetEventSlim _Complete = new ManualResetEventSlim();
 
         static async Task Main(string[] args)
         {
@@ -50,10 +50,25 @@ namespace Ticketing.Worker
             serviceCollection.Configure<AppConfiguration>(configuration.GetSection("AppConfiguration"));
             _serviceProvider = serviceCollection.BuildServiceProvider();
 
+            SendLocalMessage("Starting connection. Press Ctrl-C to close.");
+            cts = new CancellationTokenSource();
+
+            Console.CancelKeyPress += (sender, a) =>
+            {
+                SendLocalMessage($"Cancel key pressed...");
+                workIt = false;
+                _Complete.Wait();
+                SendLocalMessage($"Cancel completed!");
+            };
+
+            AssemblyLoadContext.Default.Unloading += Default_Unloading;
+
             await WorkerRunAsync();
+
+            return;
         }
 
-        private static async Task<int> WorkerRunAsync()
+        private static async Task WorkerRunAsync()
         {
             var _appConfiguration = _serviceProvider.GetService<IOptionsSnapshot<AppConfiguration>>();
             SendLocalMessage($"Worker name: {_appConfiguration.Value.WorkerName} | MessagingQueue: {_appConfiguration.Value.MessagingQueue} | Username: {_appConfiguration.Value.MessagingUsername} | SignalR: {_appConfiguration.Value.SignalR}");
@@ -69,24 +84,15 @@ namespace Ticketing.Worker
                 .Build();
             await connection.StartAsync();
 
-            await SendMessage(_appConfiguration.Value.WorkerName, "New challenger approaching!");
-
-            SendLocalMessage("Starting connection. Press Ctrl-C to close.");
-            var cts = new CancellationTokenSource();
-            Console.CancelKeyPress += (sender, a) =>
-            {
-                Shutdown();
-                a.Cancel = true;
-                cts.Cancel();
-            };
-
             connection.Closed += e =>
             {
                 SendLocalMessage($"Connection closed with error: {e}");
-                Shutdown();
                 cts.Cancel();
+                Shutdown();
                 return Task.CompletedTask;
             };
+
+            await SendMessage(_appConfiguration.Value.WorkerName, "New challenger approaching!");
 
             connection.On<string, string>("group",
                 (string name, string message) =>
@@ -119,9 +125,6 @@ namespace Ticketing.Worker
                 var starting = new ManualResetEventSlim();
 
                 SendLocalMessage("Starting application...");
-
-                // Capture SIGTERM  
-                AssemblyLoadContext.Default.Unloading += Default_Unloading;
 
                 using (var queueConnection = factory.CreateConnection())
                 using (var queueChannel = queueConnection.CreateModel())
@@ -159,29 +162,31 @@ namespace Ticketing.Worker
                     } while (workIt);
                     await SendMessage(_appConfiguration.Value.WorkerName, "finishing my shift, good night!");
                 }
-                _Shutdown.WaitOne();
-                return 0;
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.Message);
+                SendLocalMessage($"We've had a problem: {ex.Message}");
             }
             finally
             {
+                SendLocalMessage($"Cleaning up resources");
                 await connection.DisposeAsync();
-                Console.WriteLine("Cleaning up resources");
             }
-            return 1;
+            _Complete.Set();
+            SendLocalMessage($"WorkerRunAsync ---fin---");
+            return;
         }
 
         private static void SendLocalMessage(string message)
         {
             Console.WriteLine($"Local: [{DateTime.Now.ToString()}] | {message}");
         }
+
         private static void SendLocalMessage(string message, string name)
         {
             Console.WriteLine($"Local: [{DateTime.Now.ToString()}] {name} | {message}");
         }
+
         private static void SendLocalMessage(string name, string message, string groupName)
         {
             SendLocalMessage($"{groupName}/{name}", message);
@@ -199,7 +204,7 @@ namespace Ticketing.Worker
             }
         }
 
-        public static async Task SendGroupMessage(string name, string groupName, string message)
+        private static async Task SendGroupMessage(string name, string groupName, string message)
         {
             try
             {
@@ -211,7 +216,7 @@ namespace Ticketing.Worker
             }
         }
 
-        public static async Task SendGroupCompleteMessage(string name, string groupName, string message)
+        private static async Task SendGroupCompleteMessage(string name, string groupName, string message)
         {
             try
             {
@@ -223,17 +228,20 @@ namespace Ticketing.Worker
             }
         }
 
+        private static void Default_Unloading(AssemblyLoadContext obj)
+        {
+            SendLocalMessage($"Shutting down in response to SIGTERM.");
+            Shutdown();
+        }
+
         private static void Shutdown()
         {
+            SendLocalMessage($"Shutdown starting");
+            cts.Cancel();
             workIt = false;
             _Shutdown.Set();
             _Complete.Wait();
-        }
-
-        private static void Default_Unloading(AssemblyLoadContext obj)
-        {
-            Console.WriteLine($"Shutting down in response to SIGTERM.");
-            Shutdown();
+            SendLocalMessage($"Shutdown completed!");
         }
     }
 }
