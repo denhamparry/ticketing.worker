@@ -253,5 +253,10 @@ namespace Ticketing.Worker
         {
             return "https://www.youtube.com/watch?v=IxAKFlpdcfc";
         }
+        
+        private static string PubConf()
+        {
+            return "https://www.eventbrite.co.uk/e/pubconf-ndc-london-2019-tickets-52300860281?discount=U2Z676";
+        }
     }
 }
