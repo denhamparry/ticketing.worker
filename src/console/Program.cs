@@ -150,7 +150,7 @@ namespace Ticketing.Worker
                                 await SendGroupMessage(_appConfiguration.Value.WorkerName, groupName, "Processing...");
                                 Thread.Sleep(4000);
                                 await SendGroupMessage(_appConfiguration.Value.WorkerName, groupName, "Compelted, ta ra!");
-                                await SendGroupCompleteMessage(_appConfiguration.Value.WorkerName, groupName, "https://www.youtube.com/watch?v=IxAKFlpdcfc");
+                                await SendGroupCompleteMessage(_appConfiguration.Value.WorkerName, groupName, Yay());
                                 await connection.InvokeAsync("LeaveGroup", _appConfiguration.Value.WorkerName, groupName);
                             }
                         }
@@ -242,6 +242,16 @@ namespace Ticketing.Worker
             _Shutdown.Set();
             _Complete.Wait();
             SendLocalMessage($"Shutdown completed!");
+        }
+
+        private static string Boo()
+        {
+            return "https://www.youtube.com/watch?v=-dBIyA3qHKw";
+        }
+
+        private static string Yay()
+        {
+            return "https://www.youtube.com/watch?v=IxAKFlpdcfc";
         }
     }
 }
